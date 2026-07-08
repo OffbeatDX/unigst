@@ -1,0 +1,43 @@
+[package]
+name = "unigst"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.87"
+description = "Unified game-soundtrack (GST) generator for arcade rhythm games"
+readme = "README.md"
+license = "MIT"
+keywords = ["audio", "gst", "soundtrack", "cli"]
+categories = ["command-line-utilities", "multimedia::audio"]
+
+[[bin]]
+name = "unigst"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+rayon = "1"
+indicatif = "0.17"
+console = "0.15"
+encoding_rs = "0.8"
+roxmltree = "0.20"
+hound = "3"
+
+[dependencies.symphonia]
+version = "0.5"
+default-features = false
+features = ["wav", "pcm", "adpcm"]
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+]
+
+[profile.release]
+lto = true
+strip = true
