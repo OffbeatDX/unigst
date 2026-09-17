@@ -234,6 +234,7 @@ pub fn style(game_version: u16) -> Option<(&'static str, &'static str)> {
         31 => ("EPOLIS", "2023"),
         32 => ("Pinky Crush", "2024"),
         33 => ("Sparkle Shower", "2025"),
+        34 => ("Zinrai", "2026"),
         80 => ("INFINITAS", "2020"),
         _ => return None,
     })
