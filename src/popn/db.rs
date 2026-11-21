@@ -71,33 +71,50 @@ impl PeImage {
         let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let u16_at = |o: usize| -> Result<u16> {
             Ok(u16::from_le_bytes(
-                data.get(o..o + 2).context("truncated PE")?.try_into().unwrap(),
+                data.get(o..o + 2)
+                    .context("truncated PE")?
+                    .try_into()
+                    .unwrap(),
             ))
         };
         let u32_at = |o: usize| -> Result<u32> {
             Ok(u32::from_le_bytes(
-                data.get(o..o + 4).context("truncated PE")?.try_into().unwrap(),
+                data.get(o..o + 4)
+                    .context("truncated PE")?
+                    .try_into()
+                    .unwrap(),
             ))
         };
 
         let e_lfanew = u32_at(0x3C)? as usize;
-        if data.get(e_lfanew..e_lfanew + 4) != Some(b"PE\0\0") {
+        let pe_end = e_lfanew.checked_add(4).context("truncated PE")?;
+        if data.get(e_lfanew..pe_end) != Some(b"PE\0\0") {
             bail!("not a PE file");
         }
-        let nsec = u16_at(e_lfanew + 6)? as usize;
-        let opt_size = u16_at(e_lfanew + 20)? as usize;
-        let opt = e_lfanew + 24;
+        let nsec = u16_at(e_lfanew.checked_add(6).context("truncated PE")?)? as usize;
+        let opt_size = u16_at(e_lfanew.checked_add(20).context("truncated PE")?)? as usize;
+        let opt = e_lfanew.checked_add(24).context("truncated PE")?;
         let magic = u16_at(opt)?;
         if magic != 0x20B {
             bail!("expected a 64-bit popn.dll (PE32+), got magic {magic:#x}");
         }
+        let ib_off = opt.checked_add(24).context("truncated PE")?;
+        let ib_end = ib_off.checked_add(8).context("truncated PE")?;
         let image_base = u64::from_le_bytes(
-            data.get(opt + 24..opt + 32).context("truncated PE")?.try_into().unwrap(),
+            data.get(ib_off..ib_end)
+                .context("truncated PE")?
+                .try_into()
+                .unwrap(),
         );
 
+        let sec_base = opt.checked_add(opt_size).context("truncated PE")?;
+        let max_secs = data.len().saturating_sub(sec_base) / 40;
+        if nsec > max_secs {
+            bail!("truncated PE section table");
+        }
         let mut sections = Vec::with_capacity(nsec);
         for i in 0..nsec {
-            let s = opt + opt_size + i * 40;
+            let s = sec_base + i * 40;
             let vsize = u32_at(s + 8)? as u64;
             let va = u32_at(s + 12)? as u64;
             let rsize = u32_at(s + 16)? as u64;
@@ -133,7 +150,9 @@ impl PeImage {
 
     fn cstr(&self, va: u64) -> Option<String> {
         let start = self.va_to_offset(va)?;
-        let hay = self.data.get(start..start + 512.min(self.data.len() - start))?;
+        let hay = self
+            .data
+            .get(start..start + 512.min(self.data.len() - start))?;
         let end = hay.iter().position(|&b| b == 0)?;
         let (s, _, _) = encoding_rs::SHIFT_JIS.decode(&hay[..end]);
         Some(s.into_owned())
@@ -188,24 +207,31 @@ fn music_entry_valid(pe: &PeImage, off: usize) -> bool {
 
 fn find_music_table(pe: &PeImage) -> Result<(usize, usize)> {
     const POPS_CP932: &[u8] = b"\x00\x83\x7C\x83\x62\x83\x76\x83\x58\x00";
-    let hit = find(&pe.data, POPS_CP932).context("genre string 'pops' not found in DLL")?;
-    let pops_va = pe.offset_to_va(hit + 1).context("pops string outside any section")?;
+    let hits = pe.find_all(POPS_CP932);
+    if hits.is_empty() {
+        bail!("genre string 'pops' not found in DLL");
+    }
 
-    for xref in pe.find_all(&pops_va.to_le_bytes()) {
-        if !music_entry_valid(pe, xref) {
+    for hit in hits {
+        let Some(pops_va) = pe.offset_to_va(hit + 1) else {
             continue;
-        }
+        };
+        for xref in pe.find_all(&pops_va.to_le_bytes()) {
+            if !music_entry_valid(pe, xref) {
+                continue;
+            }
 
-        let mut base = xref;
-        while base >= MUSIC_ENTRY_SIZE && music_entry_valid(pe, base - MUSIC_ENTRY_SIZE) {
-            base -= MUSIC_ENTRY_SIZE;
-        }
-        let mut count = 0;
-        while music_entry_valid(pe, base + count * MUSIC_ENTRY_SIZE) {
-            count += 1;
-        }
-        if count >= 100 {
-            return Ok((base, count));
+            let mut base = xref;
+            while base >= MUSIC_ENTRY_SIZE && music_entry_valid(pe, base - MUSIC_ENTRY_SIZE) {
+                base -= MUSIC_ENTRY_SIZE;
+            }
+            let mut count = 0;
+            while music_entry_valid(pe, base + count * MUSIC_ENTRY_SIZE) {
+                count += 1;
+            }
+            if count >= 100 {
+                return Ok((base, count));
+            }
         }
     }
     bail!("music table not found (no pops xref parses as a table)");

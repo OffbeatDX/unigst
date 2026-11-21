@@ -33,7 +33,10 @@ impl<'a> Reader<'a> {
     }
 
     fn bytes(&mut self, len: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(len).ok_or_else(|| anyhow::anyhow!("overflow"))?;
+        let end = self
+            .pos
+            .checked_add(len)
+            .ok_or_else(|| anyhow::anyhow!("overflow"))?;
         let s = self
             .data
             .get(self.pos..end)
@@ -68,10 +71,14 @@ impl<'a> Reader<'a> {
     fn string_utf16(&mut self, len: usize) -> Result<String> {
         let raw = self.bytes(len)?;
         let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
             .collect();
-        Ok(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string())
+        Ok(String::from_utf16_lossy(&units)
+            .trim_end_matches('\0')
+            .to_string())
     }
 }
 

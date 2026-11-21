@@ -13,6 +13,7 @@ pub fn full_width(name: &str) -> String {
             '<' => out.push('‹'),
             '>' => out.push('›'),
             '|' => out.push('ǀ'),
+            c if c.is_control() => {}
             other => out.push(other),
         }
     }
@@ -25,7 +26,11 @@ pub fn fancy_quotes(s: &str) -> String {
     s.chars()
         .map(|c| {
             if c == '"' {
-                let r = if count % 2 == 0 { '\u{201C}' } else { '\u{201D}' };
+                let r = if count % 2 == 0 {
+                    '\u{201C}'
+                } else {
+                    '\u{201D}'
+                };
                 count += 1;
                 r
             } else {
@@ -55,12 +60,13 @@ pub fn guard_component(name: &str) -> String {
 
 pub fn fit_stem(dir: &Path, stem: &str, ext: &str) -> String {
     const MAX_PATH: usize = 259;
-    const PART_SUFFIX: usize = 5;
+    // Longest sidecar/temp suffix we write next to the output: `.covermeta` (10 chars).
+    const TEMP_SUFFIX: usize = 10;
     const MIN_STEM: usize = 20;
 
     let abs = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
     let dir_len = abs.to_string_lossy().encode_utf16().count();
-    let overhead = dir_len + 1   + 1   + ext.encode_utf16().count() + PART_SUFFIX;
+    let overhead = dir_len + 1 + 1 + ext.encode_utf16().count() + TEMP_SUFFIX;
     let budget = MAX_PATH.saturating_sub(overhead).max(MIN_STEM);
 
     if stem.encode_utf16().count() <= budget {
@@ -108,7 +114,10 @@ mod tests {
 
     #[test]
     fn fancy_quotes_alternate() {
-        assert_eq!(fancy_quotes("\"a\" \"b\""), "\u{201c}a\u{201d} \u{201c}b\u{201d}");
+        assert_eq!(
+            fancy_quotes("\"a\" \"b\""),
+            "\u{201c}a\u{201d} \u{201c}b\u{201d}"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub struct Keysounds {
 impl Keysounds {
     pub fn entry_for(&self, chart_keysound: u16) -> Option<usize> {
         if chart_keysound == 0 {
-            return Some(self.bg);
+            return (self.bg < self.wavs.len()).then_some(self.bg);
         }
         let idx = chart_keysound as usize - 1;
         (idx < self.wavs.len()).then_some(idx)

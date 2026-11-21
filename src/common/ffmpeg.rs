@@ -1,11 +1,32 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
 
 use super::audio::Pcm;
 use super::tags::{Format, TrackTags};
+
+static NO_CONSOLE_WINDOW: AtomicBool = AtomicBool::new(false);
+
+/// GUI mode: spawn ffmpeg without a console window. Without this, every ffmpeg
+/// child of a console-less process pops its own console on Windows.
+pub fn set_no_console_window(enabled: bool) {
+    NO_CONSOLE_WINDOW.store(enabled, Ordering::Relaxed);
+}
+
+fn command(program: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    if NO_CONSOLE_WINDOW.load(Ordering::Relaxed) {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
 
 pub fn locate() -> Result<PathBuf> {
     let names = exe_names("ffmpeg");
@@ -32,11 +53,13 @@ pub fn locate() -> Result<PathBuf> {
         }
     }
 
-    bail!("working ffmpeg not found — install it and put it on PATH, or place ffmpeg next to unigst")
+    bail!(
+        "working ffmpeg not found — install it and put it on PATH, or place ffmpeg next to unigst"
+    )
 }
 
 fn runs(path: &Path) -> bool {
-    Command::new(path)
+    command(path)
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -77,8 +100,32 @@ pub struct EncodeJob<'a> {
     pub cover: Option<&'a Path>,
 }
 
+struct TempFile(Option<PathBuf>);
+
+impl TempFile {
+    fn new(path: PathBuf) -> Self {
+        TempFile(Some(path))
+    }
+
+    fn path(&self) -> &Path {
+        self.0.as_deref().unwrap()
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = command(ffmpeg);
     cmd.arg("-y")
         .args(["-loglevel", "error"])
         .args(["-guess_layout_max", "0"]);
@@ -94,7 +141,9 @@ pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
 
     let stream_art = job.cover.is_some() && job.format.art_as_stream();
     let opus_meta = match job.cover {
-        Some(cover) if !job.format.art_as_stream() => Some(write_cover_metadata(job.output, cover)?),
+        Some(cover) if !job.format.art_as_stream() => {
+            Some(TempFile::new(write_cover_metadata(job.output, cover)?))
+        }
         _ => None,
     };
 
@@ -102,7 +151,7 @@ pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
         cmd.arg("-i").arg(job.cover.unwrap());
     }
     if let Some(meta) = &opus_meta {
-        cmd.arg("-i").arg(meta);
+        cmd.arg("-i").arg(meta.path());
     }
 
     if opus_meta.is_some() {
@@ -124,8 +173,8 @@ pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
         cmd.arg(arg);
     }
 
-    let part = part_path(job.output);
-    cmd.args(["-f", job.format.muxer()]).arg(&part);
+    let mut part = TempFile::new(part_path(job.output));
+    cmd.args(["-f", job.format.muxer()]).arg(part.path());
 
     let output = match &job.input {
         EncodeInput::File(_) => {
@@ -149,11 +198,8 @@ pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
             .context("waiting on ffmpeg encode")?
         }
     };
-    if let Some(meta) = &opus_meta {
-        let _ = std::fs::remove_file(meta);
-    }
+    drop(opus_meta);
     if !output.status.success() {
-        let _ = std::fs::remove_file(&part);
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
             "ffmpeg failed ({}) for {}: {}",
@@ -162,8 +208,9 @@ pub fn encode(ffmpeg: &Path, job: &EncodeJob) -> Result<()> {
             stderr.trim()
         );
     }
-    std::fs::rename(&part, job.output)
-        .with_context(|| format!("renaming {} into place", part.display()))?;
+    std::fs::rename(part.path(), job.output)
+        .with_context(|| format!("renaming {} into place", part.path().display()))?;
+    part.disarm();
     Ok(())
 }
 
@@ -174,8 +221,8 @@ fn part_path(output: &Path) -> PathBuf {
 }
 
 fn write_cover_metadata(output: &Path, cover: &Path) -> Result<PathBuf> {
-    let img = std::fs::read(cover)
-        .with_context(|| format!("reading cover art {}", cover.display()))?;
+    let img =
+        std::fs::read(cover).with_context(|| format!("reading cover art {}", cover.display()))?;
     let block = flac_picture_block(&img, cover);
     let value = base64_encode(&block);
 
@@ -247,7 +294,7 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 pub fn decode_bytes(ffmpeg: &Path, bytes: &[u8]) -> Result<Pcm> {
-    let mut child = Command::new(ffmpeg)
+    let mut child = command(ffmpeg)
         .args(["-loglevel", "error"])
         .args(["-i", "pipe:0"])
         .args(["-f", "f32le", "-acodec", "pcm_f32le"])
@@ -266,7 +313,6 @@ pub fn decode_bytes(ffmpeg: &Path, bytes: &[u8]) -> Result<Pcm> {
     let (read_res, err_out) = std::thread::scope(|s| {
         s.spawn(move || {
             let _ = stdin.write_all(bytes);
-
         });
         let err_reader = s.spawn(move || {
             let mut buf = Vec::new();
@@ -285,8 +331,8 @@ pub fn decode_bytes(ffmpeg: &Path, bytes: &[u8]) -> Result<Pcm> {
     }
 
     let mut samples = Vec::with_capacity(raw.len() / 4);
-    for chunk in raw.chunks_exact(4) {
-        samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for &chunk in raw.as_chunks::<4>().0 {
+        samples.push(f32::from_le_bytes(chunk));
     }
     Ok(Pcm::new(samples))
 }

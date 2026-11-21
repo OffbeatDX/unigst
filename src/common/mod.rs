@@ -1,8 +1,8 @@
 pub mod audio;
 pub mod bytes;
 pub mod ffmpeg;
-pub mod fs;
 pub mod formats;
+pub mod fs;
 pub mod progress;
 pub mod report;
 pub mod sanitize;

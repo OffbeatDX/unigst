@@ -70,10 +70,11 @@ pub fn build_mix(events: &[SoundEvent], pcm_cache: &[Pcm], volume: f32) -> Resul
             continue;
         }
         let use_frames = use_stereo / 2;
-        for f in 0..use_frames {
+        let start_f = (-start_frame).max(0) as usize;
+        for f in start_f..use_frames {
             let di = ((start_frame + f as i64) * 2) as usize;
             if di + 1 >= mix.len() {
-                continue;
+                break;
             }
             mix[di] += pcm.samples[f * 2] * volume;
             mix[di + 1] += pcm.samples[f * 2 + 1] * volume;
@@ -81,4 +82,22 @@ pub fn build_mix(events: &[SoundEvent], pcm_cache: &[Pcm], volume: f32) -> Resul
     }
 
     Ok(mix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negative_offset_clips_cleanly_without_panic() {
+        let pcm = vec![Pcm::new(vec![0.25, -0.25, 0.5, -0.5])];
+        let events = vec![SoundEvent {
+            offset: -10,
+            keysound_id: 0,
+            key: 0,
+            player: 0,
+        }];
+        let mix = build_mix(&events, &pcm, 1.0).expect("mix");
+        assert!(!mix.is_empty());
+    }
 }

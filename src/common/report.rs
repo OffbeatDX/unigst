@@ -29,6 +29,10 @@ pub trait ProgressSink: Sync {
 
     fn warned(&self, _msg: &str) {}
 
+    fn failed(&self, msg: &str) {
+        self.warned(msg);
+    }
+
     fn logged(&self, _msg: &str) {}
 }
 
@@ -44,6 +48,38 @@ pub struct PlannedTrack {
     pub artist: String,
 
     pub output: PathBuf,
+}
+
+impl PlannedTrack {
+    /// One-line listing used by `--dry-run`: `<id>. Artist - Title`
+    /// (`Artist - Title` when the song has no id).
+    pub fn summary_line(&self) -> String {
+        if self.id.is_empty() {
+            format!("{} - {}", self.artist, self.title)
+        } else {
+            format!("{}. {} - {}", self.id, self.artist, self.title)
+        }
+    }
+}
+
+/// One selectable song (several planned tracks may share it, e.g. SDVX
+/// per-difficulty audio). Used by the GUI's song picker.
+#[derive(Debug, Clone)]
+pub struct SongEntry {
+    /// Value for `--id`; `None` when the song can't be selected individually.
+    pub id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    /// Genre(s) as shown to the user; empty when unknown.
+    pub genre: String,
+    /// Value for `-v/--version`; `None` when unknown.
+    pub version: Option<String>,
+    /// Human-readable version name, e.g. "6 – EXCEED GEAR".
+    pub version_label: String,
+    /// Numeric sort key for the version.
+    pub version_order: u32,
+    /// Number of output files this song produces.
+    pub tracks: usize,
 }
 
 #[derive(Debug, Default)]
@@ -81,7 +117,7 @@ impl Collector {
     }
 
     pub fn fail(&self, msg: String, sink: &dyn ProgressSink) {
-        sink.warned(&msg);
+        sink.failed(&msg);
         self.failures.lock().unwrap().push(msg);
     }
 
@@ -141,6 +177,7 @@ pub trait Plan {
         self.len() == 0
     }
 
+    /// Per-item diagnostics for `--dry-run --verbose`.
     fn detail_lines(&self) -> Vec<String> {
         self.tracks()
             .iter()
@@ -150,9 +187,8 @@ pub trait Plan {
 
     fn dry_run_summary(&self) -> String;
 
-    fn nothing_to_do(&self) -> bool {
-        self.is_empty()
-    }
+    /// Exportable songs, one entry per song id, in plan order.
+    fn songs(&self) -> Vec<SongEntry>;
 }
 
 pub fn tracks_to_json(tracks: &[PlannedTrack]) -> String {

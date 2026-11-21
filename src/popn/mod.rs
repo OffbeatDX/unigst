@@ -10,9 +10,11 @@ use anyhow::{bail, Context, Result};
 use crate::cli::PopnArgs;
 use crate::common::audio::{normalize, wav24_bytes, Pcm};
 use crate::common::ffmpeg::{self, EncodeInput, EncodeJob};
-use crate::common::fs;
 use crate::common::formats::{archive::Blob, decode, ifs};
-use crate::common::report::{self, CancelToken, Collector, PlannedTrack, ProgressSink, RunReport};
+use crate::common::fs;
+use crate::common::report::{
+    self, CancelToken, Collector, PlannedTrack, ProgressSink, RunReport, SongEntry,
+};
 use crate::common::sanitize;
 use crate::common::tags::TrackTags;
 
@@ -53,6 +55,32 @@ impl report::Plan for Plan {
                 title: job.title.clone(),
                 artist: job.artist.clone(),
                 output: job.out.clone(),
+            })
+            .collect()
+    }
+
+    fn songs(&self) -> Vec<SongEntry> {
+        self.jobs
+            .iter()
+            .map(|job| {
+                // Without the music db (no popn.dll) there are no ids or versions.
+                let known = job.id.is_some();
+                SongEntry {
+                    id: job.id.map(|i| i.to_string()),
+                    title: job.title.clone(),
+                    artist: job.artist.clone(),
+                    genre: job.genre.clone(),
+                    version: known.then(|| job.version.to_string()),
+                    version_label: if known {
+                        db::style(job.version)
+                            .map(|(name, _)| name.to_string())
+                            .unwrap_or_else(|| job.version.to_string())
+                    } else {
+                        "Unknown/Removed".into()
+                    },
+                    version_order: if known { job.version } else { u32::MAX },
+                    tracks: 1,
+                }
             })
             .collect()
     }
@@ -108,10 +136,22 @@ pub fn plan(args: &PopnArgs) -> Result<Plan> {
 
     let mut jobs = match songs {
         Some(songs) => db_jobs(args, songs, &sd, &mut warnings),
-        None => fallback_jobs(args, &sd),
+        None => {
+            if !args.id.is_empty() || args.version.is_some() {
+                let reason = warnings
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("music db unavailable");
+                bail!("cannot filter by --id or --version without a readable pop'n DLL ({reason})");
+            }
+            fallback_jobs(args, &sd)
+        }
     };
     if jobs.is_empty() {
-        bail!("no pop'n music songs matched the selection under {}", sd.display());
+        bail!(
+            "no pop'n music songs matched the selection under {}",
+            sd.display()
+        );
     }
     jobs.sort_by_key(|j| j.id.unwrap_or(u32::MAX));
 
@@ -159,6 +199,29 @@ pub fn execute(
     )
 }
 
+/// Main game DLL name pattern (for messages); see [`is_game_dll_name`].
+pub const GAME_DLL: &str = "popn.dll / popn<N>.dll";
+
+/// `popn.dll` or `popn` + digits (`popn22.dll`). Deliberately not `popn*.dll`:
+/// mods such as `popnhax.dll` sit next to the game DLL and hold no music db.
+fn is_game_dll_name(lowercase: &str) -> bool {
+    lowercase
+        .strip_prefix("popn")
+        .and_then(|rest| rest.strip_suffix(".dll"))
+        .is_some_and(|mid| mid.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The game DLL (which holds the music db) in `modules/` or the root.
+fn find_game_dll(input: &Path) -> Option<PathBuf> {
+    fs::find_game_dll_by(input, is_game_dll_name)
+}
+
+/// Whether `input` is a pop'n music install folder: the game DLL and the sd/
+/// song folder must both be present.
+pub fn looks_like(input: &Path) -> bool {
+    find_game_dll(input).is_some() && find_sd_root(input).is_some()
+}
+
 fn find_sd_root(input: &Path) -> Option<PathBuf> {
     fs::first_existing_dir([
         input.join("plain_data").join("sd"),
@@ -168,25 +231,26 @@ fn find_sd_root(input: &Path) -> Option<PathBuf> {
 }
 
 fn load_db(args: &PopnArgs, warnings: &mut Vec<String>) -> Option<Vec<PopnSong>> {
-    let candidates: Vec<PathBuf> = match &args.dll {
-        Some(p) => vec![args.common.input.join(p)],
-        None => vec![
-            args.common.input.join("modules").join("popn.dll"),
-            args.common.input.join("popn.dll"),
-        ],
+    let input = &args.common.input;
+    let found = match &args.dll {
+        Some(p) => Some(input.join(p)).filter(|p| p.is_file()),
+        None => find_game_dll(input),
     };
-    let Some(dll) = candidates.iter().find(|p| p.is_file()) else {
+    let Some(dll) = found else {
+        let looked = match &args.dll {
+            Some(p) => input.join(p).display().to_string(),
+            None => format!(
+                "{GAME_DLL} in {} and {}",
+                input.join("modules").display(),
+                input.display()
+            ),
+        };
         warnings.push(format!(
-            "popn.dll not found (looked at {}) — no titles/artists, filenames used instead",
-            candidates
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "game DLL not found (looked for {looked}) — no titles/artists, filenames used instead"
         ));
         return None;
     };
-    match db::parse_dll(dll) {
+    match db::parse_dll(&dll) {
         Ok(songs) => Some(songs),
         Err(err) => {
             warnings.push(format!(
@@ -218,7 +282,10 @@ fn db_jobs(
                 .collect();
             if ifs_paths.is_empty() {
                 if args.id.contains(&s.id) {
-                    warnings.push(format!("--id {}: song data not on disk ({})", s.id, s.title));
+                    warnings.push(format!(
+                        "--id {}: song data not on disk ({})",
+                        s.id, s.title
+                    ));
                 }
                 return None;
             }
@@ -338,7 +405,11 @@ fn resolve_one(path: &Path) -> Result<Resolved> {
 
 const RATE: i64 = 44_100;
 
-fn build_mix(events: &[PlayEvent], keysounds: &archive::Keysounds, pcm: &[Pcm]) -> Result<Vec<f32>> {
+fn build_mix(
+    events: &[PlayEvent],
+    keysounds: &archive::Keysounds,
+    pcm: &[Pcm],
+) -> Result<Vec<f32>> {
     let mut max_end: i64 = 0;
     let placements: Vec<(i64, usize)> = events
         .iter()
@@ -392,7 +463,10 @@ fn process_song(
     let resolved = match resolve(&job.ifs_paths) {
         Ok(r) => r,
         Err(err) => {
-            collector.warn(format!("{}: unreadable, skipped ({err:#})", job.title), sink);
+            collector.warn(
+                format!("{}: unreadable, skipped ({err:#})", job.title),
+                sink,
+            );
             return Ok(());
         }
     };
@@ -420,7 +494,10 @@ fn process_song(
         .collect();
     if failed > 0 {
         collector.warn(
-            format!("{}: {failed} keysound(s) failed to decode — mixed as silence", job.title),
+            format!(
+                "{}: {failed} keysound(s) failed to decode — mixed as silence",
+                job.title
+            ),
             sink,
         );
     }
@@ -429,7 +506,10 @@ fn process_song(
     drop(pcm);
     let peak = normalize(&mut mixed);
     if peak > 1.0 {
-        sink.logged(&format!("{}: mix peaked at {peak:.2}x full scale — normalized", job.title));
+        sink.logged(&format!(
+            "{}: mix peaked at {peak:.2}x full scale — normalized",
+            job.title
+        ));
     }
     let wav = wav24_bytes(&mixed)?;
     drop(mixed);
@@ -465,13 +545,19 @@ fn output_path(out_root: &Path, song: &PopnSong, ext: &str) -> PathBuf {
     let stem = if song.artist.is_empty() {
         sanitize::clean(&song.title)
     } else {
-        format!("{} - {}", sanitize::clean(&song.artist), sanitize::clean(&song.title))
+        format!(
+            "{} - {}",
+            sanitize::clean(&song.artist),
+            sanitize::clean(&song.title)
+        )
     };
     sanitize::output_path(out_root, &album_name(song.version), &stem, ext)
 }
 
 fn build_tags(job: &SongJob) -> TrackTags {
-    let date = db::style(job.version).map(|(_, year)| year.to_string()).unwrap_or_default();
+    let date = db::style(job.version)
+        .map(|(_, year)| year.to_string())
+        .unwrap_or_default();
     TrackTags {
         title: job.title.clone(),
         artist: job.artist.clone(),
@@ -486,5 +572,21 @@ fn build_tags(job: &SongJob) -> TrackTags {
         },
         date,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_game_dll_name;
+
+    #[test]
+    fn game_dll_names() {
+        assert!(is_game_dll_name("popn.dll"));
+        assert!(is_game_dll_name("popn19.dll"));
+        assert!(is_game_dll_name("popn22.dll"));
+        assert!(!is_game_dll_name("popnhax.dll"));
+        assert!(!is_game_dll_name("popn22_hook.dll"));
+        assert!(!is_game_dll_name("popn.exe"));
+        assert!(!is_game_dll_name("xpopn.dll"));
     }
 }

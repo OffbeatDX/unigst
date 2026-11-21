@@ -26,9 +26,17 @@ jobs:
       - name: Resolve tag
         id: tag
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_TAG } else { $env:REF_NAME }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw 'release tag must not be empty' }
           "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: cargo test --all-targets --locked
 
       - name: Build
         run: cargo build --release --locked
@@ -37,7 +45,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          $tag = '${{ steps.tag.outputs.tag }}'
-          if (-not (Test-Path target\release\unigst.exe)) { throw 'build produced no exe' }
-          gh release create $tag target\release\unigst.exe --title $tag --generate-notes
+          foreach ($exe in 'unigst.exe', 'unigstgui.exe') {
+            if (-not (Test-Path "target\release\$exe")) { throw "build produced no $exe" }
+          }
+          gh release create $env:TAG target\release\unigst.exe target\release\unigstgui.exe --title $env:TAG --generate-notes

@@ -74,7 +74,9 @@ impl std::str::FromStr for Format {
             "flac" => Ok(Format::Flac),
             "mp3" => Ok(Format::Mp3),
             "opus" => Ok(Format::Opus),
-            other => Err(format!("unknown format '{other}' (expected flac, mp3, or opus)")),
+            other => Err(format!(
+                "unknown format '{other}' (expected flac, mp3, or opus)"
+            )),
         }
     }
 }

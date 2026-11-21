@@ -39,18 +39,27 @@ pub fn parse(data: &[u8]) -> Option<Vec<PlayEvent>> {
                 let keysound = assigned[button];
 
                 if keysound != 0 {
-                    events.push(PlayEvent { offset_ms, keysound });
+                    events.push(PlayEvent {
+                        offset_ms,
+                        keysound,
+                    });
                 }
             }
             CMD_ASSIGN => {
                 let button = (param >> 12) as usize;
                 assigned[button] = param & 0xFFF;
             }
-            CMD_BG_START => events.push(PlayEvent { offset_ms, keysound: 0 }),
+            CMD_BG_START => events.push(PlayEvent {
+                offset_ms,
+                keysound: 0,
+            }),
             CMD_AUTO => {
                 let keysound = param & 0xFFF;
                 if keysound != 0 {
-                    events.push(PlayEvent { offset_ms, keysound });
+                    events.push(PlayEvent {
+                        offset_ms,
+                        keysound,
+                    });
                 }
             }
             _ => {}
@@ -92,9 +101,18 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                PlayEvent { offset_ms: 0, keysound: 0 },
-                PlayEvent { offset_ms: 500, keysound: 7 },
-                PlayEvent { offset_ms: 700, keysound: 9 },
+                PlayEvent {
+                    offset_ms: 0,
+                    keysound: 0
+                },
+                PlayEvent {
+                    offset_ms: 500,
+                    keysound: 7
+                },
+                PlayEvent {
+                    offset_ms: 700,
+                    keysound: 9
+                },
             ]
         );
     }
@@ -105,7 +123,13 @@ mod tests {
         d.extend(ev12(0, CMD_ASSIGN, (1 << 12) | 4));
         d.extend(ev12(250, CMD_NOTE, 1));
         let events = parse(&d).expect("new chart");
-        assert_eq!(events, vec![PlayEvent { offset_ms: 250, keysound: 4 }]);
+        assert_eq!(
+            events,
+            vec![PlayEvent {
+                offset_ms: 250,
+                keysound: 4
+            }]
+        );
     }
 
     #[test]

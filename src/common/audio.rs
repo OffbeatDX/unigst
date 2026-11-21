@@ -28,7 +28,7 @@ fn to_stereo(samples: &[f32], channels: usize) -> Vec<f32> {
         return Vec::new();
     }
     if channels == 2 {
-        return samples.to_vec();
+        return samples[..(samples.len() / 2) * 2].to_vec();
     }
     let frames = samples.len() / channels;
     let mut out = Vec::with_capacity(frames * 2);
@@ -53,7 +53,10 @@ fn to_stereo(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 fn resample_stereo(samples: &[f32], src: u32, dst: u32) -> Vec<f32> {
-    if src == dst || samples.is_empty() {
+    if src == 0 || dst == 0 || samples.is_empty() {
+        return Vec::new();
+    }
+    if src == dst {
         return samples.to_vec();
     }
     let in_frames = samples.len() / 2;
@@ -65,8 +68,8 @@ fn resample_stereo(samples: &[f32], src: u32, dst: u32) -> Vec<f32> {
     let mut out = Vec::with_capacity(out_frames * 2);
     for i in 0..out_frames {
         let src_pos = i as f64 / ratio;
-        let idx = src_pos.floor() as usize;
-        let frac = (src_pos - idx as f64) as f32;
+        let idx = (src_pos.floor() as usize).min(in_frames - 1);
+        let frac = (src_pos - idx as f64).clamp(0.0, 1.0) as f32;
         let next = (idx + 1).min(in_frames - 1);
         for ch in 0..2 {
             let a = samples[idx * 2 + ch];

@@ -94,6 +94,12 @@ impl ProgressSink for Reporter {
         }
     }
 
+    fn failed(&self, msg: &str) {
+        if self.verbose {
+            eprintln!("error: {msg}");
+        }
+    }
+
     fn logged(&self, msg: &str) {
         if self.verbose {
             println!("{msg}");

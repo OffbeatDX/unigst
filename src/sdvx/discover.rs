@@ -38,6 +38,15 @@ fn best_jacket(folder: &Path, id: &str) -> Option<PathBuf> {
         .find_map(|d| jacket_for_diff(folder, id, d as char))
 }
 
+fn split_diff_suffix(stem: &str) -> Option<(char, char)> {
+    match stem.as_bytes() {
+        [.., b'_', digit, diff] if digit.is_ascii_digit() && diff.is_ascii_alphabetic() => {
+            Some((*diff as char, *digit as char))
+        }
+        _ => None,
+    }
+}
+
 pub fn get_variants(
     song: &Song,
     music_dir: &Path,
@@ -80,23 +89,18 @@ pub fn get_variants(
 
     let mut variants = Vec::with_capacity(audio_files.len());
     for audio in audio_files {
-        let stem: Vec<char> = audio
+        let stem = audio
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .chars()
-            .collect();
+            .unwrap_or_default();
 
-        let (diff_char, diff_digit) = match stem[..] {
-            [.., digit, diff] if digit.is_ascii_digit() => (diff, digit),
-            _ => {
-                variants.push(AudioVariant {
-                    audio,
-                    jacket: fallback_jacket.clone(),
-                    diff_label: None,
-                });
-                continue;
-            }
+        let Some((diff_char, diff_digit)) = split_diff_suffix(stem) else {
+            variants.push(AudioVariant {
+                audio,
+                jacket: fallback_jacket.clone(),
+                diff_label: None,
+            });
+            continue;
         };
 
         let diff_label = diff_name(diff_char)
@@ -104,8 +108,7 @@ pub fn get_variants(
             .map(String::from)
             .unwrap_or_else(|| diff_char.to_string());
 
-        let jacket =
-            jacket_for_diff(&folder, &id, diff_digit).or_else(|| fallback_jacket.clone());
+        let jacket = jacket_for_diff(&folder, &id, diff_digit).or_else(|| fallback_jacket.clone());
 
         variants.push(AudioVariant {
             audio,
@@ -119,7 +122,7 @@ pub fn get_variants(
 
 #[cfg(test)]
 mod tests {
-    use super::is_pre_or_fx;
+    use super::{is_pre_or_fx, split_diff_suffix};
 
     #[test]
     fn pre_and_fx_variants_are_skipped() {
@@ -135,5 +138,12 @@ mod tests {
         assert!(!is_pre_or_fx("0026_gorilla_pinocchio_4i"));
         assert!(!is_pre_or_fx("1758_helpme_erin_remix_marines_5m"));
         assert!(!is_pre_or_fx("0400_prelude_ens"));
+    }
+
+    #[test]
+    fn diff_suffix_requires_underscore() {
+        assert_eq!(split_diff_suffix("0026_song_4i"), Some(('i', '4')));
+        assert_eq!(split_diff_suffix("1758_remix_5m"), Some(('m', '5')));
+        assert_eq!(split_diff_suffix("0500_song2u"), None);
     }
 }

@@ -5,7 +5,11 @@ use clap::{Args, Parser, Subcommand};
 use crate::common::tags::Format;
 
 #[derive(Parser, Debug)]
-#[command(name = "unigst", version, about = "Unified GST generator for arcade rhythm games")]
+#[command(
+    name = "unigst",
+    version,
+    about = "Unified GST generator for arcade rhythm games"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -28,7 +32,7 @@ pub struct CommonArgs {
     #[arg(short, long, default_value = "GST")]
     pub output: PathBuf,
 
-    #[arg(short, long, default_value = "flac")]
+    #[arg(short, long, default_value = "opus")]
     pub format: Format,
 
     #[arg(short, long, default_value_t = 0)]

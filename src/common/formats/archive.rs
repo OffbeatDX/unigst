@@ -20,18 +20,33 @@ fn slice(data: &[u8], pos: usize, len: usize) -> Option<&[u8]> {
 
 pub fn read_2dx_entries(data: &[u8]) -> Result<Vec<Entry2dx<'_>>> {
     let file_count = read_u32(data, 0x14).context("2dx: truncated header")? as usize;
+    let max_entries = data.len().saturating_sub(0x48) / 4;
+    if file_count > max_entries {
+        bail!("2dx: truncated index ({file_count} entries)");
+    }
     let mut entries = Vec::with_capacity(file_count);
     for i in 0..file_count {
         let offset = read_u32(data, 0x48 + i * 4).context("2dx: truncated index")? as usize;
         if slice(data, offset, 4).context("2dx: bad offset")? != b"2DX9" {
             bail!("2dx: invalid 2DX9 entry at {offset:#x}");
         }
-        let data_offset = read_u32(data, offset + 4).context("2dx: bad entry")? as usize;
-        let data_size = read_u32(data, offset + 8).context("2dx: bad entry")? as usize;
+        let data_offset = offset
+            .checked_add(4)
+            .and_then(|p| read_u32(data, p))
+            .context("2dx: bad entry")? as usize;
+        let data_size = offset
+            .checked_add(8)
+            .and_then(|p| read_u32(data, p))
+            .context("2dx: bad entry")? as usize;
 
-        let track_id = u16_le(data, offset + 14).unwrap_or(0);
-        let payload = slice(data, offset + data_offset, data_size)
-            .context("2dx: payload out of range")?;
+        let track_id = offset
+            .checked_add(14)
+            .and_then(|p| u16_le(data, p))
+            .unwrap_or(0);
+        let payload_start = offset
+            .checked_add(data_offset)
+            .context("2dx: payload offset overflow")?;
+        let payload = slice(data, payload_start, data_size).context("2dx: payload out of range")?;
         entries.push(Entry2dx { payload, track_id });
     }
     Ok(entries)
@@ -39,6 +54,10 @@ pub fn read_2dx_entries(data: &[u8]) -> Result<Vec<Entry2dx<'_>>> {
 
 fn read_s3p(data: &[u8]) -> Result<Vec<Blob>> {
     let file_count = read_u32(data, 4).context("s3p: truncated header")? as usize;
+    let max_entries = data.len().saturating_sub(8) / 8;
+    if file_count > max_entries {
+        bail!("s3p: truncated index ({file_count} entries)");
+    }
     let mut samples = Vec::with_capacity(file_count);
     for i in 0..file_count {
         let entry = i * 8 + 8;
@@ -46,10 +65,18 @@ fn read_s3p(data: &[u8]) -> Result<Vec<Blob>> {
         if slice(data, offset, 4).context("s3p: bad offset")? != b"S3V0" {
             bail!("s3p: invalid S3V0 entry at {offset:#x}");
         }
-        let data_offset = read_u32(data, offset + 4).context("s3p: bad entry")? as usize;
-        let data_size = read_u32(data, offset + 8).context("s3p: bad entry")? as usize;
-        let payload = slice(data, offset + data_offset, data_size)
-            .context("s3p: payload out of range")?;
+        let data_offset = offset
+            .checked_add(4)
+            .and_then(|p| read_u32(data, p))
+            .context("s3p: bad entry")? as usize;
+        let data_size = offset
+            .checked_add(8)
+            .and_then(|p| read_u32(data, p))
+            .context("s3p: bad entry")? as usize;
+        let payload_start = offset
+            .checked_add(data_offset)
+            .context("s3p: payload offset overflow")?;
+        let payload = slice(data, payload_start, data_size).context("s3p: payload out of range")?;
         samples.push(Blob::Wma(payload.to_vec()));
     }
     Ok(samples)
@@ -140,5 +167,14 @@ mod tests {
         let mut bad = tiny_2dx(b"x");
         bad.truncate(0x4A);
         assert!(read_bytes(&bad).is_err());
+
+        // Bogus huge file_count must return Err, not OOM-panic.
+        let mut bogus_2dx = vec![0u8; 0x50];
+        bogus_2dx[0x14..0x18].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read_bytes(&bogus_2dx).is_err());
+
+        let mut bogus_s3p = b"S3P0".to_vec();
+        bogus_s3p.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read_bytes(&bogus_s3p).is_err());
     }
 }

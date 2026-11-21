@@ -43,8 +43,7 @@ fn type_info(id: u8) -> Option<(i32, usize)> {
     Some(t)
 }
 
-const SIXBIT: &[u8] =
-    b"0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+const SIXBIT: &[u8] = b"0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
 
 struct Decoder<'a> {
     data: &'a [u8],
@@ -60,7 +59,10 @@ struct Decoder<'a> {
 
 impl<'a> Decoder<'a> {
     fn node_u8(&mut self) -> Result<u8> {
-        let b = *self.data.get(self.node_off).ok_or_else(|| anyhow::anyhow!("node EOF"))?;
+        let b = *self
+            .data
+            .get(self.node_off)
+            .ok_or_else(|| anyhow::anyhow!("node EOF"))?;
         self.node_off += 1;
         Ok(b)
     }
@@ -73,7 +75,10 @@ impl<'a> Decoder<'a> {
     }
 
     fn be_u32(&self, off: usize) -> Result<u32> {
-        let s = self.data.get(off..off + 4).ok_or_else(|| anyhow::anyhow!("data EOF"))?;
+        let s = self
+            .data
+            .get(off..off + 4)
+            .ok_or_else(|| anyhow::anyhow!("data EOF"))?;
         Ok(u32::from_be_bytes(s.try_into().unwrap()))
     }
 
@@ -115,7 +120,9 @@ impl<'a> Decoder<'a> {
     }
 
     fn grab_aligned(&mut self, count: i32, elem: usize) -> Result<Vec<u8>> {
-        let total = count as usize * elem;
+        let total = (count as usize)
+            .checked_mul(elem)
+            .ok_or_else(|| anyhow::anyhow!("data overflow"))?;
 
         if self.b_off.is_multiple_of(4) {
             self.b_off = self.d_off;
@@ -125,14 +132,38 @@ impl<'a> Decoder<'a> {
         }
         let out;
         if total == 1 {
-            out = self.data.get(self.b_off..self.b_off + 1).ok_or_else(|| anyhow::anyhow!("data EOF"))?.to_vec();
-            self.b_off += 1;
+            let end = self
+                .b_off
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?;
+            out = self
+                .data
+                .get(self.b_off..end)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?
+                .to_vec();
+            self.b_off = end;
         } else if total == 2 {
-            out = self.data.get(self.w_off..self.w_off + 2).ok_or_else(|| anyhow::anyhow!("data EOF"))?.to_vec();
-            self.w_off += 2;
+            let end = self
+                .w_off
+                .checked_add(2)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?;
+            out = self
+                .data
+                .get(self.w_off..end)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?
+                .to_vec();
+            self.w_off = end;
         } else {
-            out = self.data.get(self.d_off..self.d_off + total).ok_or_else(|| anyhow::anyhow!("data EOF"))?.to_vec();
-            self.d_off += total;
+            let end = self
+                .d_off
+                .checked_add(total)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?;
+            out = self
+                .data
+                .get(self.d_off..end)
+                .ok_or_else(|| anyhow::anyhow!("data EOF"))?
+                .to_vec();
+            self.d_off = end;
             self.realign_d();
         }
         let trailing = self.b_off.max(self.w_off);
@@ -146,12 +177,16 @@ impl<'a> Decoder<'a> {
     fn grab_var(&mut self) -> Result<Vec<u8>> {
         let size = self.be_u32(self.d_off)? as usize;
         self.d_off += 4;
+        let end = self
+            .d_off
+            .checked_add(size)
+            .ok_or_else(|| anyhow::anyhow!("data EOF"))?;
         let out = self
             .data
-            .get(self.d_off..self.d_off + size)
+            .get(self.d_off..end)
             .ok_or_else(|| anyhow::anyhow!("data EOF"))?
             .to_vec();
-        self.d_off += size;
+        self.d_off = end;
         self.realign_d();
         Ok(out)
     }
@@ -173,22 +208,18 @@ impl<'a> Decoder<'a> {
                         }
                     }
                     2 => {
-                        for c in bytes.chunks_exact(2) {
-                            parts.push((i16::from_be_bytes([c[0], c[1]]) as i64).to_string());
+                        for &c in bytes.as_chunks::<2>().0 {
+                            parts.push((i16::from_be_bytes(c) as i64).to_string());
                         }
                     }
                     4 => {
-                        for c in bytes.chunks_exact(4) {
-                            parts.push(
-                                (i32::from_be_bytes([c[0], c[1], c[2], c[3]]) as i64).to_string(),
-                            );
+                        for &c in bytes.as_chunks::<4>().0 {
+                            parts.push((i32::from_be_bytes(c) as i64).to_string());
                         }
                     }
                     8 => {
-                        for c in bytes.chunks_exact(8) {
-                            let mut a = [0u8; 8];
-                            a.copy_from_slice(c);
-                            parts.push(i64::from_be_bytes(a).to_string());
+                        for &c in bytes.as_chunks::<8>().0 {
+                            parts.push(i64::from_be_bytes(c).to_string());
                         }
                     }
                     _ => {}
@@ -230,8 +261,11 @@ pub fn decode(input: &[u8]) -> Result<KbinNode> {
     let mut stack: Vec<KbinNode> = vec![std::mem::take(&mut root)];
 
     while dec.node_off < dec.node_end {
-        while dec.node_peek()? == 0 {
+        while dec.node_off < dec.node_end && dec.node_peek()? == 0 {
             dec.node_off += 1;
+        }
+        if dec.node_off >= dec.node_end {
+            break;
         }
         let raw = dec.node_u8()?;
         let is_array = raw & 0x40 != 0;
@@ -241,7 +275,9 @@ pub fn decode(input: &[u8]) -> Result<KbinNode> {
             break;
         }
         if node_type == NODE_END {
-            let done = stack.pop().ok_or_else(|| anyhow::anyhow!("stack underflow"))?;
+            let done = stack
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("stack underflow"))?;
             stack
                 .last_mut()
                 .ok_or_else(|| anyhow::anyhow!("stack underflow"))?

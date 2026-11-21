@@ -199,14 +199,14 @@ fn child_text<'a>(node: Node<'a, 'a>, name: &str) -> Result<&'a str> {
 }
 
 pub fn parse_music_db(db_path: &Path, filters: &Filters) -> Result<Vec<Song>> {
-    let bytes =
-        fs::read(db_path).with_context(|| format!("cannot read {}", db_path.display()))?;
+    let bytes = fs::read(db_path).with_context(|| format!("cannot read {}", db_path.display()))?;
 
     let (text, _, _) = encoding_rs::SHIFT_JIS.decode(&bytes);
 
-    let text = match text.strip_prefix("<?xml") {
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+    let text = match trimmed.strip_prefix("<?xml") {
         Some(rest) => rest.split_once("?>").map(|(_, t)| t).unwrap_or(rest),
-        None => &text,
+        None => trimmed,
     };
 
     let doc = roxmltree::Document::parse(text).context("music_db.xml is not valid XML")?;

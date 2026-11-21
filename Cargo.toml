@@ -2,35 +2,66 @@
 name = "unigst"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.95"
 description = "Unified game-soundtrack (GST) generator for arcade rhythm games"
 readme = "README.md"
+repository = "https://github.com/OffbeatDX/unigst"
+homepage = "https://github.com/OffbeatDX/unigst"
 license = "MIT"
-keywords = ["audio", "gst", "soundtrack", "cli"]
+keywords = ["audio", "gst", "soundtrack", "cli", "gui"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
+# Command line only: no GUI dependencies, smallest exe.
 [[bin]]
 name = "unigst"
 path = "src/main.rs"
+
+# GUI build (GUI only; the CLI is `unigst`).
+[[bin]]
+name = "unigstgui"
+path = "src/bin/unigstgui/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["gui"]
+# Build `unigstgui`. `cargo build --release --no-default-features` builds only
+# the CLI and skips compiling the GUI dependencies entirely.
+gui = ["dep:eframe", "dep:rfd", "dep:serde", "dep:egui_extras", "dep:skrifa"]
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 rayon = "1"
-indicatif = "0.17"
-console = "0.15"
+indicatif = "0.18"
+console = "0.16"
 encoding_rs = "0.8"
-roxmltree = "0.20"
+roxmltree = "0.21"
 hound = "3"
+# GUI (unigstgui only, `gui` feature). glow keeps it lighter than wgpu;
+# x11/wayland are only used on Linux builds.
+eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "persistence", "x11", "wayland"] }
+rfd = { version = "0.17", optional = true }
+serde = { version = "1", optional = true, features = ["derive"] }
+egui_extras = { version = "0.37", optional = true, default-features = false }
+# Font metrics for aligning fallback fonts (gui::baseline_offset). Keep at the
+# version egui/epaint uses so it isn't compiled twice.
+skrifa = { version = "0.44", optional = true, default-features = false, features = ["std"] }
 
 [dependencies.symphonia]
-version = "0.5"
+version = "0.6"
 default-features = false
 features = ["wav", "pcm", "adpcm"]
 
+# Windows uses system fonts (see gui::install_fonts); elsewhere bundle egui's.
+[target.'cfg(not(windows))'.dependencies.eframe]
+version = "0.37"
+optional = true
+default-features = false
+features = ["default_fonts"]
+
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_Media_MediaFoundation",
@@ -41,3 +72,45 @@ features = [
 [profile.release]
 lto = true
 strip = true
+# Smaller exe, slightly slower release builds.
+codegen-units = 1
+
+# GUI crates optimised for size (~1 MB smaller exe); audio code keeps opt-level 3.
+[profile.release.package.egui]
+opt-level = "s"
+[profile.release.package.epaint]
+opt-level = "s"
+[profile.release.package.ecolor]
+opt-level = "s"
+[profile.release.package.emath]
+opt-level = "s"
+[profile.release.package.eframe]
+opt-level = "s"
+[profile.release.package.egui-winit]
+opt-level = "s"
+[profile.release.package.egui_glow]
+opt-level = "s"
+[profile.release.package.egui_extras]
+opt-level = "s"
+[profile.release.package.winit]
+opt-level = "s"
+[profile.release.package.glow]
+opt-level = "s"
+[profile.release.package.glutin]
+opt-level = "s"
+[profile.release.package.glutin-winit]
+opt-level = "s"
+[profile.release.package.skrifa]
+opt-level = "s"
+[profile.release.package.read-fonts]
+opt-level = "s"
+[profile.release.package.harfrust]
+opt-level = "s"
+[profile.release.package.vello_cpu]
+opt-level = "s"
+[profile.release.package.vello_common]
+opt-level = "s"
+[profile.release.package.rfd]
+opt-level = "s"
+[profile.release.package.accesskit]
+opt-level = "s"

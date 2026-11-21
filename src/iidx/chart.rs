@@ -28,7 +28,13 @@ const CMD_LOAD_SAMPLE_P2: u8 = 3;
 const CMD_END: u8 = 6;
 const CMD_BGM_NOTE: u8 = 7;
 
-fn retro_update_key(sounds: &mut [SoundEvent], player: i32, key: i32, offset: i32, keysound_id: i32) {
+fn retro_update_key(
+    sounds: &mut [SoundEvent],
+    player: i32,
+    key: i32,
+    offset: i32,
+    keysound_id: i32,
+) {
     for s in sounds.iter_mut() {
         if s.player == player && s.key == key && s.offset >= offset {
             s.keysound_id = keysound_id;

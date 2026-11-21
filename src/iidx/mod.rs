@@ -10,9 +10,11 @@ use anyhow::{bail, Context, Result};
 use crate::cli::IidxArgs;
 use crate::common::audio::{normalize, wav24_bytes, Pcm};
 use crate::common::ffmpeg::{self, EncodeInput, EncodeJob};
-use crate::common::fs;
 use crate::common::formats::{archive, decode, ifs};
-use crate::common::report::{self, CancelToken, Collector, PlannedTrack, ProgressSink, RunReport};
+use crate::common::fs;
+use crate::common::report::{
+    self, CancelToken, Collector, PlannedTrack, ProgressSink, RunReport, SongEntry,
+};
 use crate::common::sanitize;
 use crate::common::tags::TrackTags;
 
@@ -82,7 +84,11 @@ impl report::Plan for Plan {
                     .as_ref()
                     .map(|m| m.title.clone())
                     .unwrap_or_else(|| format!("{:05}", job.files.song_id)),
-                artist: job.meta.as_ref().map(|m| m.artist.clone()).unwrap_or_default(),
+                artist: job
+                    .meta
+                    .as_ref()
+                    .map(|m| m.artist.clone())
+                    .unwrap_or_default(),
                 output: job.out.clone(),
             })
             .collect()
@@ -94,6 +100,40 @@ impl report::Plan for Plan {
             "\n{} song(s) selected ({ifs} in .ifs, {extracted} extracted)",
             self.len()
         )
+    }
+
+    fn songs(&self) -> Vec<SongEntry> {
+        self.jobs
+            .iter()
+            .map(|job| {
+                let (title, artist, genre) = match &job.meta {
+                    Some(m) => (m.title.clone(), m.artist.clone(), m.genre.clone()),
+                    None => (
+                        format!("{:05}", job.files.song_id),
+                        String::new(),
+                        String::new(),
+                    ),
+                };
+                let version = job.meta.as_ref().map(|m| m.game_version);
+                SongEntry {
+                    id: Some(job.files.song_id.to_string()),
+                    title,
+                    artist,
+                    genre,
+                    version: version.map(|v| v.to_string()),
+                    version_label: match version {
+                        Some(v) => match musicdata::style(v) {
+                            Some((name, _)) => format!("{v} – {name}"),
+                            None => v.to_string(),
+                        },
+                        // Song data on disk without a music_data entry: usually removed songs.
+                        None => "Unknown/Removed".into(),
+                    },
+                    version_order: version.map(u32::from).unwrap_or(u32::MAX),
+                    tracks: 1,
+                }
+            })
+            .collect()
     }
 
     fn detail_lines(&self) -> Vec<String> {
@@ -215,7 +255,17 @@ fn find_sound_root(input: &Path) -> PathBuf {
         .unwrap_or_else(|| input.to_path_buf())
 }
 
-fn load_music_data(input: &Path) -> (HashMap<u32, SongMeta>, Vec<String>) {
+/// Whether `input` is a beatmania IIDX contents folder: the game DLL and a
+/// music_data.bin must both be present.
+pub fn looks_like(input: &Path) -> bool {
+    fs::find_game_dll(input, GAME_DLL).is_some() && !music_data_paths(input).is_empty()
+}
+
+/// Main game DLL; required for detection.
+pub const GAME_DLL: &str = "bm2dx.dll";
+
+/// Every music_data.bin to merge: flat locations first, then data/info/<n>/ in order.
+fn music_data_paths(input: &Path) -> Vec<PathBuf> {
     let info = input.join("data").join("info");
 
     let mut numbered: Vec<(u32, PathBuf)> = Vec::new();
@@ -223,7 +273,11 @@ fn load_music_data(input: &Path) -> (HashMap<u32, SongMeta>, Vec<String>) {
         for e in entries.filter_map(|e| e.ok()) {
             let p = e.path();
             if p.is_dir() {
-                if let Some(n) = p.file_name().and_then(|n| n.to_str()).and_then(|s| s.parse().ok()) {
+                if let Some(n) = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|s| s.parse().ok())
+                {
                     let bin = p.join("music_data.bin");
                     if bin.is_file() {
                         numbered.push((n, bin));
@@ -245,7 +299,11 @@ fn load_music_data(input: &Path) -> (HashMap<u32, SongMeta>, Vec<String>) {
         }
     }
     paths.extend(numbered.into_iter().map(|(_, p)| p));
+    paths
+}
 
+fn load_music_data(input: &Path) -> (HashMap<u32, SongMeta>, Vec<String>) {
+    let paths = music_data_paths(input);
     let mut merged: HashMap<u32, SongMeta> = HashMap::new();
     let mut warnings = Vec::new();
     for path in &paths {
@@ -271,7 +329,11 @@ fn collect(dir: &Path, out: &mut HashMap<u32, SongFiles>) {
     };
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+        else {
             continue;
         };
 
@@ -305,7 +367,10 @@ fn collect(dir: &Path, out: &mut HashMap<u32, SongFiles>) {
 }
 
 fn is_gameplay_audio(name: &str) -> bool {
-    let stem = match name.strip_suffix(".2dx").or_else(|| name.strip_suffix(".s3p")) {
+    let stem = match name
+        .strip_suffix(".2dx")
+        .or_else(|| name.strip_suffix(".s3p"))
+    {
         Some(s) => s,
         None => return false,
     };
@@ -323,13 +388,19 @@ fn resolve(song: &SongFiles, load_audio: bool) -> Result<Resolved> {
             let mut candidates: Vec<PathBuf> = Vec::new();
             for entry in std::fs::read_dir(dir)?.filter_map(|e| e.ok()) {
                 let p = entry.path();
-                if p.file_name().and_then(|n| n.to_str()).is_some_and(is_gameplay_audio) {
+                if p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(is_gameplay_audio)
+                {
                     candidates.push(p);
                 }
             }
             let best = select_best(&candidates, |p| {
                 (
-                    p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string(),
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string(),
                     peek_sample_count(&read_file_prefix(p, AUDIO_HEADER_PEEK)),
                 )
             });
@@ -353,8 +424,11 @@ fn resolve(song: &SongFiles, load_audio: bool) -> Result<Resolved> {
                 .read(&format!("{}.1", song.name))
                 .with_context(|| format!("{}.1 missing in {}", song.name, path.display()))?;
 
-            let candidates: Vec<String> =
-                idx.names().filter(|n| is_gameplay_audio(n)).map(String::from).collect();
+            let candidates: Vec<String> = idx
+                .names()
+                .filter(|n| is_gameplay_audio(n))
+                .map(String::from)
+                .collect();
             let best = select_best(&candidates, |n| {
                 let head = idx.read_prefix(n, AUDIO_HEADER_PEEK).unwrap_or_default();
                 (n.clone(), peek_sample_count(&head))
@@ -364,7 +438,8 @@ fn resolve(song: &SongFiles, load_audio: bool) -> Result<Resolved> {
             };
             let name = candidates[best].clone();
             let audio = if load_audio {
-                idx.read(&name).with_context(|| format!("reading {name} from {}", path.display()))?
+                idx.read(&name)
+                    .with_context(|| format!("reading {name} from {}", path.display()))?
             } else {
                 Vec::new()
             };
@@ -514,7 +589,11 @@ fn album_name(meta: Option<&SongMeta>) -> String {
 
 fn output_path(out_root: &Path, song: &SongFiles, meta: Option<&SongMeta>, ext: &str) -> PathBuf {
     let stem = match meta {
-        Some(m) => format!("{} - {}", sanitize::clean(&m.artist), sanitize::clean(&m.title)),
+        Some(m) => format!(
+            "{} - {}",
+            sanitize::clean(&m.artist),
+            sanitize::clean(&m.title)
+        ),
         None => format!("{:05}", song.song_id),
     };
     sanitize::output_path(out_root, &album_name(meta), &stem, ext)

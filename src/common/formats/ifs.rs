@@ -42,13 +42,19 @@ impl IfsIndex {
 
 fn be_u32(d: &[u8], o: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(
-        d.get(o..o + 4).context("IFS header truncated")?.try_into().unwrap(),
+        d.get(o..o + 4)
+            .context("IFS header truncated")?
+            .try_into()
+            .unwrap(),
     ))
 }
 
 fn be_u16(d: &[u8], o: usize) -> Result<u16> {
     Ok(u16::from_be_bytes(
-        d.get(o..o + 2).context("IFS header truncated")?.try_into().unwrap(),
+        d.get(o..o + 2)
+            .context("IFS header truncated")?
+            .try_into()
+            .unwrap(),
     ))
 }
 
@@ -64,7 +70,8 @@ pub fn index(path: &Path) -> Result<IfsIndex> {
     let mut f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
 
     let mut head = [0u8; 0x24];
-    f.read_exact(&mut head).with_context(|| format!("reading {} header", path.display()))?;
+    f.read_exact(&mut head)
+        .with_context(|| format!("reading {} header", path.display()))?;
 
     if be_u32(&head, 0)? != IFS_SIGNATURE {
         bail!("not an IFS file: {}", path.display());
@@ -73,7 +80,8 @@ pub fn index(path: &Path) -> Result<IfsIndex> {
 
     let manifest_end = be_u32(&head, 0x10)? as usize;
     let manifest_start = if version > 1 { 0x24 } else { 0x14 };
-    if manifest_end < manifest_start {
+    let file_len = f.metadata()?.len();
+    if manifest_end < manifest_start || manifest_end as u64 > file_len {
         bail!("IFS manifest range invalid in {}", path.display());
     }
 
@@ -96,7 +104,10 @@ pub fn index(path: &Path) -> Result<IfsIndex> {
 fn collect(node: &KbinNode, out: &mut HashMap<String, (u32, u32)>) {
     if node.children.is_empty() {
         if let Some(text) = &node.text {
-            let ints: Vec<i64> = text.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            let ints: Vec<i64> = text
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect();
 
             if ints.len() >= 2 && ints[0] >= 0 && ints[1] >= 0 {
                 out.insert(node.name.clone(), (ints[0] as u32, ints[1] as u32));
