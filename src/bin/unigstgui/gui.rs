@@ -30,7 +30,7 @@ const SETTINGS_VERSION: u32 = 3;
 pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(concat!("unigst GUI ", env!("CARGO_PKG_VERSION")))
+            .with_title(format!("unigst GUI {}", unigst::VERSION))
             .with_inner_size([900.0, 760.0])
             .with_min_inner_size([640.0, 520.0]),
         ..Default::default()
@@ -218,15 +218,27 @@ impl Settings {
         }
     }
 
-    /// Arguments shared by scanning and exporting.
+    /// Minimal argv for scanning the input folder (independent of output/format).
+    fn scan_argv(&self, game: Game) -> Vec<OsString> {
+        vec![
+            "unigst".into(),
+            game.subcommand().into(),
+            format!("--input={}", self.input.trim()).into(),
+            "--dry-run".into(),
+        ]
+    }
+
+    /// Arguments for exporting. Uses `--flag=value` for paths so names
+    /// starting with `-` can never be misparsed as flags.
     fn base_argv(&self, game: Game) -> Vec<OsString> {
-        let mut a: Vec<OsString> = vec!["unigst".into(), game.subcommand().into()];
-        a.push("-i".into());
-        a.push(self.input.trim().into());
+        let mut a: Vec<OsString> = vec![
+            "unigst".into(),
+            game.subcommand().into(),
+            format!("--input={}", self.input.trim()).into(),
+        ];
         let output = self.output.trim();
         if !output.is_empty() {
-            a.push("-o".into());
-            a.push(output.into());
+            a.push(format!("--output={output}").into());
         }
         a.push("-f".into());
         a.push(self.format.clone().into());
@@ -242,10 +254,13 @@ impl Settings {
 }
 
 fn quote_argv(argv: &[OsString]) -> String {
+    const SHELL_META: &[char] = &[
+        '"', '&', '|', '<', '>', '^', '%', '(', ')', '!', ';', '$', '\'', '`',
+    ];
     argv.iter()
         .map(|a| {
             let s = a.to_string_lossy();
-            if s.is_empty() || s.contains(|c: char| c.is_whitespace() || c == '"') {
+            if s.is_empty() || s.contains(|c: char| c.is_whitespace() || SHELL_META.contains(&c)) {
                 let mut out = String::with_capacity(s.len() + 2);
                 out.push('"');
                 let mut backslashes = 0usize;
@@ -311,6 +326,9 @@ struct Catalog {
     /// Songs with / without a known version.
     known: usize,
     unknown: usize,
+    /// Any song has an ID (otherwise individual selection isn't possible, e.g.
+    /// pop'n fallback mode when the DLL db couldn't be parsed).
+    has_ids: bool,
     keys: Vec<SortKeys>,
     /// Any song has a genre: show the Genre column.
     has_genre: bool,
@@ -366,10 +384,12 @@ impl Catalog {
             })
             .collect();
         let has_genre = songs.iter().any(|s| !s.genre.is_empty());
+        let has_ids = songs.iter().any(|s| s.id.is_some());
         let known = songs.iter().filter(|s| s.version.is_some()).count();
         Catalog {
             unknown: songs.len() - known,
             known,
+            has_ids,
             songs,
             keys,
             has_genre,
@@ -444,8 +464,7 @@ fn scan(settings: &Settings) -> ScanResult {
             )),
         );
     };
-    let mut argv = settings.base_argv(game);
-    argv.push("--dry-run".into());
+    let argv = settings.scan_argv(game);
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
         Err(e) => return (Some(game), Err(clap_error(e))),
@@ -794,12 +813,20 @@ impl App {
         let (Some(cat), Some(game)) = (self.catalog(), self.scan.game()) else {
             return Err("Pick a valid game folder first.".into());
         };
-        if self.selected.is_empty() {
-            return Err("Select songs to export.".into());
+        if cat.songs.is_empty() {
+            return Err("No songs found to export.".into());
         }
         let mut argv = self.settings.base_argv(game);
         if self.settings.verbose {
             argv.push("--verbose".into());
+        }
+        // Fallback mode (e.g. pop'n with an unparseable DLL): songs have no IDs,
+        // so export everything without filters.
+        if !cat.has_ids {
+            return Ok(argv);
+        }
+        if self.selected.is_empty() {
+            return Err("Select songs to export.".into());
         }
 
         let in_version: Vec<&SongEntry> = cat
@@ -1179,13 +1206,19 @@ impl App {
             .header(row_h, |mut h| {
                 h.col(|ui| {
                     let mut all = n_ids > 0 && n_sel == n_ids;
+                    let tip = if n_ids == 0 && !listed.is_empty() {
+                        "Individual selection requires the game database; Export all exports every song"
+                    } else {
+                        "Select / deselect all listed songs"
+                    };
                     toggle_all = ui
                         .add_enabled(
                             enabled && n_ids > 0,
                             egui::Checkbox::without_text(&mut all)
                                 .indeterminate(n_sel > 0 && n_sel < n_ids),
                         )
-                        .on_hover_text("Select / deselect all listed songs")
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(tip)
                         .clicked();
                 });
                 let mut cols = vec![
@@ -1327,14 +1360,19 @@ impl App {
                 }
                 ui.spinner();
             } else {
-                let label = if selected_n == 0 {
+                let export_all_fallback = self
+                    .catalog()
+                    .is_some_and(|c| !c.has_ids && !c.songs.is_empty());
+                let label = if export_all_fallback {
+                    "  Export all  ".to_string()
+                } else if selected_n == 0 {
                     "  Export  ".to_string()
                 } else {
                     format!("  Export ({selected_n})  ")
                 };
                 if ui
                     .add_enabled(
-                        self.catalog().is_some() && selected_n > 0,
+                        self.catalog().is_some() && (export_all_fallback || selected_n > 0),
                         egui::Button::new(label),
                     )
                     .on_disabled_hover_text("Select songs to export")
@@ -1860,21 +1898,39 @@ mod tests {
     }
 
     #[test]
-    fn quote_argv_handles_spaces_quotes_and_trailing_backslashes() {
+    fn quote_argv_handles_spaces_quotes_metachars_and_trailing_backslashes() {
         let argv: Vec<OsString> = [
             "unigst",
             "sdvx",
-            "-i",
-            r"C:\My Games\SDVX\",
-            "-o",
-            r#"C:\Out\say "hi""#,
+            r"--input=C:\My Games\SDVX\",
+            r#"--output=C:\Out\say "hi""#,
+            r"--output=C:\Rhythm&Music(1)",
         ]
         .into_iter()
         .map(Into::into)
         .collect();
         assert_eq!(
             quote_argv(&argv),
-            r#"unigst sdvx -i "C:\My Games\SDVX\\" -o "C:\Out\say \"hi\"""#
+            r#"unigst sdvx "--input=C:\My Games\SDVX\\" "--output=C:\Out\say \"hi\"" "--output=C:\Rhythm&Music(1)""#
         );
+    }
+
+    #[test]
+    fn fallback_catalog_without_ids_marks_has_ids_false() {
+        let cat = Catalog::new(
+            vec![SongEntry {
+                id: None,
+                title: "track01".into(),
+                artist: String::new(),
+                genre: String::new(),
+                version: None,
+                version_label: "Unknown/Removed".into(),
+                version_order: u32::MAX,
+                tracks: 1,
+            }],
+            vec![],
+        );
+        assert!(!cat.has_ids);
+        assert!(cat.unknown_in_all());
     }
 }

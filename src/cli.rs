@@ -7,7 +7,7 @@ use crate::common::tags::Format;
 #[derive(Parser, Debug)]
 #[command(
     name = "unigst",
-    version,
+    version = crate::VERSION,
     about = "Unified GST generator for arcade rhythm games"
 )]
 pub struct Cli {

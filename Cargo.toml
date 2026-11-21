@@ -1,8 +1,9 @@
 [package]
 name = "unigst"
-version = "1.0.0"
+version = "2026.11.21+1"
 edition = "2021"
 rust-version = "1.95"
+default-run = "unigst"
 description = "Unified game-soundtrack (GST) generator for arcade rhythm games"
 readme = "README.md"
 repository = "https://github.com/OffbeatDX/unigst"

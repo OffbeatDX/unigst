@@ -5,8 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  check:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,3 +31,20 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets --locked
+
+  linux-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (CLI only)
+        run: cargo clippy --no-default-features --all-targets --locked -- -D warnings
+
+      - name: Test (CLI only)
+        run: cargo test --no-default-features --all-targets --locked

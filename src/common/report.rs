@@ -151,6 +151,7 @@ where
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
+        .exit_handler(|_| crate::common::formats::mf::shutdown_thread())
         .build()
         .context("failed to build thread pool")?;
 

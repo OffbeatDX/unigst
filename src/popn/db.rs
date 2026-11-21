@@ -150,9 +150,8 @@ impl PeImage {
 
     fn cstr(&self, va: u64) -> Option<String> {
         let start = self.va_to_offset(va)?;
-        let hay = self
-            .data
-            .get(start..start + 512.min(self.data.len() - start))?;
+        let len = 512.min(self.data.len().saturating_sub(start));
+        let hay = self.data.get(start..start + len)?;
         let end = hay.iter().position(|&b| b == 0)?;
         let (s, _, _) = encoding_rs::SHIFT_JIS.decode(&hay[..end]);
         Some(s.into_owned())

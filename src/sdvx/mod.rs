@@ -295,13 +295,15 @@ fn build_tags(job: &TrackJob, args: &SdvxArgs) -> TrackTags {
     let song = &job.song;
     let album = album_for(song, args.version.as_deref());
 
-    let mut tags = TrackTags {
+    TrackTags {
         title: display_title(job),
         artist: song.artist.clone(),
         album,
         album_artist: "Various Artists".to_string(),
         genre: song.genres.join(", "),
         track: song.song_id.clone(),
+        disc: song.version.clone(),
+        total_discs: TOTAL_VERSIONS.to_string(),
         bpm: Some(song.bpm),
         date: if song.release_date >= 10000 {
             (song.release_date / 10000).to_string()
@@ -309,11 +311,5 @@ fn build_tags(job: &TrackJob, args: &SdvxArgs) -> TrackTags {
             String::new()
         },
         ..Default::default()
-    };
-
-    if args.version.is_none() {
-        tags.disc = song.version.clone();
-        tags.total_discs = TOTAL_VERSIONS.to_string();
     }
-    tags
 }

@@ -20,30 +20,17 @@ mod imp {
     const ALL_STREAMS: u32 = 0xFFFF_FFFE;
     const END_OF_STREAM: u32 = 0x2;
 
-    struct MfGuard {
+    struct MfState {
         com: bool,
         mf: bool,
     }
 
-    impl Drop for MfGuard {
-        fn drop(&mut self) {
-            unsafe {
-                if self.mf {
-                    let _ = MFShutdown();
-                }
-                if self.com {
-                    CoUninitialize();
-                }
-            }
-        }
-    }
-
     thread_local! {
-        static MF_GUARD: RefCell<Option<MfGuard>> = const { RefCell::new(None) };
+        static MF_STATE: RefCell<Option<MfState>> = const { RefCell::new(None) };
     }
 
     fn ensure_init() {
-        MF_GUARD.with(|slot| {
+        MF_STATE.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_none() {
                 let (com, mf) = unsafe {
@@ -51,9 +38,25 @@ mod imp {
                     let mf = MFStartup(MF_VERSION, MFSTARTUP_FULL).is_ok();
                     (com, mf)
                 };
-                *slot = Some(MfGuard { com, mf });
+                *slot = Some(MfState { com, mf });
             }
         });
+    }
+
+    /// Tear down COM/Media Foundation on the current worker thread before it
+    /// exits, outside the Windows TLS/loader lock.
+    pub fn shutdown_thread() {
+        let state = MF_STATE.with(|slot| slot.borrow_mut().take());
+        if let Some(state) = state {
+            unsafe {
+                if state.mf {
+                    let _ = MFShutdown();
+                }
+                if state.com {
+                    CoUninitialize();
+                }
+            }
+        }
     }
 
     unsafe fn read_all(reader: &IMFSourceReader) -> Result<RawPcm, String> {
@@ -138,9 +141,12 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::decode_bytes;
+pub use imp::{decode_bytes, shutdown_thread};
 
 #[cfg(not(windows))]
 pub fn decode_bytes(_bytes: &[u8]) -> Result<RawPcm, String> {
     Err("Media Foundation decoding is only available on Windows".to_string())
 }
+
+#[cfg(not(windows))]
+pub fn shutdown_thread() {}
