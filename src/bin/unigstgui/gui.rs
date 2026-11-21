@@ -253,10 +253,12 @@ impl Settings {
     }
 }
 
+/// Render argv as a cmd.exe / `CommandLineToArgvW` command line for display
+/// and "Copy command". Double quotes protect cmd's `& | < > ^ ( ) ;`, but not
+/// `%VAR%` / `!VAR!` expansion, and PowerShell still expands `$` and `` ` ``
+/// inside double quotes, so those aren't treated as needing quotes.
 fn quote_argv(argv: &[OsString]) -> String {
-    const SHELL_META: &[char] = &[
-        '"', '&', '|', '<', '>', '^', '%', '(', ')', '!', ';', '$', '\'', '`',
-    ];
+    const SHELL_META: &[char] = &['"', '&', '|', '<', '>', '^', '(', ')', ';'];
     argv.iter()
         .map(|a| {
             let s = a.to_string_lossy();
@@ -1363,6 +1365,11 @@ impl App {
                 let export_all_fallback = self
                     .catalog()
                     .is_some_and(|c| !c.has_ids && !c.songs.is_empty());
+                // Same reason the export would be refused, for the disabled tooltip.
+                let disabled_reason = self
+                    .export_argv()
+                    .err()
+                    .unwrap_or_else(|| "Select songs to export".into());
                 let label = if export_all_fallback {
                     "  Export all  ".to_string()
                 } else if selected_n == 0 {
@@ -1375,7 +1382,7 @@ impl App {
                         self.catalog().is_some() && (export_all_fallback || selected_n > 0),
                         egui::Button::new(label),
                     )
-                    .on_disabled_hover_text("Select songs to export")
+                    .on_disabled_hover_text(disabled_reason)
                     .clicked()
                 {
                     self.start(&ctx);

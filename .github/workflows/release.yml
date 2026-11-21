@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# Serialize releases so two same-day dispatches can't pick the same tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
@@ -34,7 +39,8 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           if ($env:EVENT_NAME -eq 'workflow_dispatch') {
-            $tag = $env:INPUT_TAG.Trim()
+            # An empty input may arrive as an unset variable on Windows runners.
+            $tag = "$env:INPUT_TAG".Trim()
             if ([string]::IsNullOrEmpty($tag)) {
               $today = (Get-Date).ToUniversalTime().ToString('yyyy.MM.dd')
               $existing = git tag -l "v$today" "v$today.*"
@@ -53,7 +59,8 @@ jobs:
             $tag = $env:REF_NAME
           }
 
-          if ($tag -notmatch '^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$') {
+          # Zero-padded month/day so manual tags match what auto-increment looks for.
+          if ($tag -notmatch '^v\d{4}\.\d{2}\.\d{2}(\.\d+)?$') {
             throw "release tag '$tag' must match vYYYY.MM.DD or vYYYY.MM.DD.N"
           }
 

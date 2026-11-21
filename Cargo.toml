@@ -1,6 +1,9 @@
 [package]
 name = "unigst"
-version = "2026.11.21+1"
+# Placeholder for local/dev builds. Release builds take their displayed version
+# from the tag via `UNIGST_VERSION` (see src/lib.rs and release.yml); Cargo
+# can't hold zero-padded dates like 2026.01.05 anyway.
+version = "0.0.0-dev"
 edition = "2021"
 rust-version = "1.95"
 default-run = "unigst"

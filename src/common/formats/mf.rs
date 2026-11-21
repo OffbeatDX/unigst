@@ -29,6 +29,12 @@ mod imp {
         static MF_STATE: RefCell<Option<MfState>> = const { RefCell::new(None) };
     }
 
+    /// Lazily start COM + Media Foundation on the current thread.
+    ///
+    /// Teardown happens only in [`shutdown_thread`], which `report::run_jobs`
+    /// registers as the rayon pool's exit handler. So `decode_bytes` must only
+    /// be called from `run_jobs` pool threads; any other thread would leak its
+    /// COM/MF initialization until process exit.
     fn ensure_init() {
         MF_STATE.with(|slot| {
             let mut slot = slot.borrow_mut();
